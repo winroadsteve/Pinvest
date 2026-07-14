@@ -126,6 +126,8 @@ export default function App() {
   const [startDateInput, setStartDateInput] = useState<string>(new Date().toISOString().split('T')[0]);
   const [selectedPin, setSelectedPin] = useState<PinType>('WAEC');
   const [topUpId, setTopUpId] = useState<string | null>(null);
+  const [customProfitPerPin, setCustomProfitPerPin] = useState<string>('100');
+  const [customDurationDays, setCustomDurationDays] = useState<string>('180');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [withdrawModal, setWithdrawModal] = useState<{ open: boolean, investment?: Investment }>({ open: false });
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
@@ -136,6 +138,15 @@ export default function App() {
   const [editAmount, setEditAmount] = useState('');
   const [editPin, setEditPin] = useState<PinType>('WAEC');
   const [editDate, setEditDate] = useState('');
+  const [editProfitPerPin, setEditProfitPerPin] = useState('');
+  const [editDurationDays, setEditDurationDays] = useState('');
+
+  // Automatically set default profit per pin when a pin type is selected
+  useEffect(() => {
+    if (!topUpId) {
+      setCustomProfitPerPin(PIN_CONFIGS[selectedPin].interest.toString());
+    }
+  }, [selectedPin, topUpId]);
 
   // Test Connection
   useEffect(() => {
@@ -173,6 +184,8 @@ export default function App() {
 
     setIsSubmitting(true);
     const config = PIN_CONFIGS[selectedPin];
+    const profitPerPin = parseFloat(customProfitPerPin) || config.interest;
+    const durationDays = parseInt(customDurationDays) || 180;
     
     // Check for existing investment to top up (by ID or Name)
     const existingInv = topUpId 
@@ -185,10 +198,14 @@ export default function App() {
       const newTotalAmount = existingInv.amount + numAmount;
       const newPinCount = newTotalAmount / config.cost;
       
+      const activeProfitPerPin = parseFloat(customProfitPerPin) || existingInv.interestPerPin || config.interest;
+      
       // New Calculation: > 500k earns 20k/month (120k for 6 months)
-      let totalExpectedInterest = newPinCount * config.interest;
+      let totalExpectedInterest = newPinCount * activeProfitPerPin;
       if (newTotalAmount > 500000) {
-        totalExpectedInterest = 20000 * 6; // 120,000 for 6 months
+        const existingDurationDays = Math.round((existingInv.payoutDate.toMillis() - existingInv.startDate.toMillis()) / (24 * 60 * 60 * 1000)) || 180;
+        const durationMonths = existingDurationDays / 30;
+        totalExpectedInterest = 20000 * durationMonths; // 20k/month
       }
 
       const newHistory: TransactionRecord[] = [
@@ -203,6 +220,7 @@ export default function App() {
           pinType: selectedPin, // Update to the latest pin type
           amount: newTotalAmount,
           pinCount: newPinCount,
+          interestPerPin: activeProfitPerPin,
           totalExpectedInterest: totalExpectedInterest,
           history: newHistory
         });
@@ -220,13 +238,14 @@ export default function App() {
     const pinCount = numAmount / config.cost;
     
     // New Calculation: > 500k earns 20k/month (120k for 6 months)
-    let totalExpectedInterest = pinCount * config.interest;
+    let totalExpectedInterest = pinCount * profitPerPin;
     if (numAmount > 500000) {
-      totalExpectedInterest = 20000 * 6; // 120,000 for 6 months
+      const durationMonths = durationDays / 30;
+      totalExpectedInterest = 20000 * durationMonths; // 20k/month
     }
     
     const startDate = Timestamp.fromDate(new Date(startDateInput));
-    const payoutDate = Timestamp.fromMillis(startDate.toMillis() + 180 * 24 * 60 * 60 * 1000); // 6 months (180 days)
+    const payoutDate = Timestamp.fromMillis(startDate.toMillis() + durationDays * 24 * 60 * 60 * 1000); // custom duration in days
 
     const newInvestment: Investment = {
       userId: GUEST_USER_ID,
@@ -234,7 +253,7 @@ export default function App() {
       pinType: selectedPin,
       amount: numAmount,
       pinCount,
-      interestPerPin: config.interest,
+      interestPerPin: profitPerPin,
       totalExpectedInterest,
       startDate,
       payoutDate,
@@ -261,6 +280,11 @@ export default function App() {
     setEditAmount(inv.amount.toString());
     setEditPin(inv.pinType);
     setEditDate(new Date(inv.startDate.toMillis()).toISOString().split('T')[0]);
+    
+    // Calculate the existing duration in days
+    const durationDays = Math.round((inv.payoutDate.toMillis() - inv.startDate.toMillis()) / (24 * 60 * 60 * 1000)) || 180;
+    setEditProfitPerPin((inv.interestPerPin ?? PIN_CONFIGS[inv.pinType].interest).toString());
+    setEditDurationDays(durationDays.toString());
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
@@ -274,14 +298,18 @@ export default function App() {
     const config = PIN_CONFIGS[editPin];
     const pinCount = numAmount / config.cost;
     
+    const profitPerPin = parseFloat(editProfitPerPin) || config.interest;
+    const durationDays = parseInt(editDurationDays) || 180;
+    
     // New Calculation: > 500k earns 20k/month (120k for 6 months)
-    let totalExpectedInterest = pinCount * config.interest;
+    let totalExpectedInterest = pinCount * profitPerPin;
     if (numAmount > 500000) {
-      totalExpectedInterest = 20000 * 6; // 120,000 for 6 months
+      const durationMonths = durationDays / 30;
+      totalExpectedInterest = 20000 * durationMonths; // 20k/month
     }
     
     const startDate = Timestamp.fromDate(new Date(editDate));
-    const payoutDate = Timestamp.fromMillis(startDate.toMillis() + 180 * 24 * 60 * 60 * 1000);
+    const payoutDate = Timestamp.fromMillis(startDate.toMillis() + durationDays * 24 * 60 * 60 * 1000);
 
     try {
       const invRef = doc(db, 'investments', editModal.investment.id!);
@@ -290,7 +318,7 @@ export default function App() {
         pinType: editPin,
         amount: numAmount,
         pinCount,
-        interestPerPin: config.interest,
+        interestPerPin: profitPerPin,
         totalExpectedInterest,
         startDate,
         payoutDate
@@ -315,6 +343,12 @@ export default function App() {
     setTopUpId(id);
     setInvestorName(name);
     setSelectedPin(pin);
+    const existing = investments.find(inv => inv.id === id);
+    if (existing) {
+      setCustomProfitPerPin((existing.interestPerPin ?? PIN_CONFIGS[pin].interest).toString());
+      const durationDays = Math.round((existing.payoutDate.toMillis() - existing.startDate.toMillis()) / (24 * 60 * 60 * 1000)) || 180;
+      setCustomDurationDays(durationDays.toString());
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
     // Focus the amount input
     const amountInput = document.getElementById('investment-amount');
@@ -383,12 +417,14 @@ export default function App() {
     investments.forEach(inv => {
       const start = inv.startDate.toMillis();
       const end = inv.payoutDate.toMillis();
-      const duration = end - start;
+      const duration = Math.max(1000, end - start);
       const elapsed = Math.max(0, Math.min(now - start, duration));
       
       const accumulated = (elapsed / duration) * inv.totalExpectedInterest;
       totalAccumulated += accumulated;
-      dailyAccrual += inv.totalExpectedInterest / 180;
+      
+      const durationDays = Math.round(duration / (24 * 60 * 60 * 1000)) || 180;
+      dailyAccrual += inv.totalExpectedInterest / durationDays;
     });
 
     const netBalance = totalInvested + totalAccumulated - totalWithdrawn;
@@ -541,6 +577,31 @@ export default function App() {
                       className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
                       required
                     />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Profit per Pin (₦)</label>
+                      <input 
+                        type="number"
+                        value={customProfitPerPin}
+                        onChange={(e) => setCustomProfitPerPin(e.target.value)}
+                        placeholder="e.g. 100"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Duration (Days)</label>
+                      <input 
+                        type="number"
+                        value={customDurationDays}
+                        onChange={(e) => setCustomDurationDays(e.target.value)}
+                        placeholder="e.g. 180"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                    </div>
                   </div>
 
                   <button 
@@ -714,7 +775,10 @@ export default function App() {
                         <button
                           key={type}
                           type="button"
-                          onClick={() => setEditPin(type)}
+                          onClick={() => {
+                            setEditPin(type);
+                            setEditProfitPerPin(PIN_CONFIGS[type].interest.toString());
+                          }}
                           className={`p-3 rounded-xl border-2 text-left transition-all ${
                             editPin === type ? 'border-blue-600 bg-blue-50' : 'border-gray-100'
                           }`}
@@ -745,6 +809,31 @@ export default function App() {
                       className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
                       required
                     />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Profit per Pin (₦)</label>
+                      <input 
+                        type="number"
+                        value={editProfitPerPin}
+                        onChange={(e) => setEditProfitPerPin(e.target.value)}
+                        placeholder="e.g. 100"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Duration (Days)</label>
+                      <input 
+                        type="number"
+                        value={editDurationDays}
+                        onChange={(e) => setEditDurationDays(e.target.value)}
+                        placeholder="e.g. 180"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                    </div>
                   </div>
 
                   <button 
