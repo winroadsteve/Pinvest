@@ -19,10 +19,19 @@ export interface WithdrawalRecord {
 }
 
 export interface TransactionRecord {
-  type: 'deposit' | 'withdrawal';
+  type: 'deposit' | 'withdrawal' | 'pin_withdrawal';
   amount: number;
   date: Timestamp;
   pinType?: PinType;
+  pinCount?: number;
+}
+
+export interface SoldPinRecord {
+  pinType: PinType;
+  pinCount: number;
+  costPerPin: number;
+  totalCost: number;
+  date: Timestamp;
 }
 
 export interface Investment {
@@ -40,6 +49,7 @@ export interface Investment {
   totalWithdrawn: number;
   withdrawals?: WithdrawalRecord[];
   history?: TransactionRecord[];
+  soldPins?: SoldPinRecord[];
 }
 
 export interface UserProfile {

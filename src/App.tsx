@@ -133,6 +133,9 @@ export default function App() {
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [withdrawDateInput, setWithdrawDateInput] = useState<string>(new Date().toISOString().split('T')[0]);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [withdrawMode, setWithdrawMode] = useState<'funds' | 'pins'>('funds');
+  const [withdrawPinsCount, setWithdrawPinsCount] = useState<string>('');
+  const [withdrawPinsType, setWithdrawPinsType] = useState<PinType>('WAEC');
   const [editModal, setEditModal] = useState<{ open: boolean, investment?: Investment }>({ open: false });
   const [editName, setEditName] = useState('');
   const [editAmount, setEditAmount] = useState('');
@@ -147,6 +150,16 @@ export default function App() {
       setCustomProfitPerPin(PIN_CONFIGS[selectedPin].interest.toString());
     }
   }, [selectedPin, topUpId]);
+
+  // Set default pin type when withdrawal modal opens and reset states
+  useEffect(() => {
+    if (withdrawModal.open && withdrawModal.investment) {
+      setWithdrawPinsType(withdrawModal.investment.pinType);
+      setWithdrawMode('funds');
+      setWithdrawPinsCount('');
+      setWithdrawAmount('');
+    }
+  }, [withdrawModal.open, withdrawModal.investment]);
 
   // Test Connection
   useEffect(() => {
@@ -357,10 +370,7 @@ export default function App() {
 
   const handleWithdraw = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!withdrawModal.investment || !withdrawAmount || isSubmitting) return;
-
-    const numWithdraw = parseFloat(withdrawAmount);
-    if (isNaN(numWithdraw) || numWithdraw <= 0) return;
+    if (!withdrawModal.investment || isSubmitting) return;
 
     const inv = withdrawModal.investment;
     const now = Date.now();
@@ -372,15 +382,18 @@ export default function App() {
     
     const totalAvailable = inv.amount + currentAccumulated - (inv.totalWithdrawn || 0);
 
-    if (numWithdraw > totalAvailable) {
-      setWithdrawError("Insufficient funds (Capital + Accumulated Interest)");
-      return;
-    }
+    let updateFields: any = {};
 
-    setWithdrawError(null);
-    setIsSubmitting(true);
-    try {
-      const invRef = doc(db, 'investments', inv.id!);
+    if (withdrawMode === 'funds') {
+      if (!withdrawAmount) return;
+      const numWithdraw = parseFloat(withdrawAmount);
+      if (isNaN(numWithdraw) || numWithdraw <= 0) return;
+
+      if (numWithdraw > totalAvailable) {
+        setWithdrawError("Insufficient funds (Capital + Accumulated Interest)");
+        return;
+      }
+
       const newWithdrawal = {
         amount: numWithdraw,
         date: Timestamp.fromDate(new Date(withdrawDateInput))
@@ -391,13 +404,55 @@ export default function App() {
         { type: 'withdrawal', amount: numWithdraw, date: Timestamp.fromDate(new Date(withdrawDateInput)) }
       ];
 
-      await updateDoc(invRef, {
+      updateFields = {
         totalWithdrawn: (inv.totalWithdrawn || 0) + numWithdraw,
         withdrawals: [...(inv.withdrawals || []), newWithdrawal],
         history: newHistory
-      });
+      };
+    } else {
+      if (!withdrawPinsCount) return;
+      const numPins = parseInt(withdrawPinsCount);
+      if (isNaN(numPins) || numPins <= 0) return;
+
+      const costPerPin = PIN_CONFIGS[withdrawPinsType].cost;
+      const totalPinCost = numPins * costPerPin;
+
+      if (totalPinCost > totalAvailable) {
+        setWithdrawError(`Insufficient funds. Need ₦${totalPinCost.toLocaleString()} but only ₦${totalAvailable.toLocaleString()} is available.`);
+        return;
+      }
+
+      const newSoldPin = {
+        pinType: withdrawPinsType,
+        pinCount: numPins,
+        costPerPin: costPerPin,
+        totalCost: totalPinCost,
+        date: Timestamp.fromDate(new Date(withdrawDateInput))
+      };
+
+      const newTransaction: TransactionRecord = {
+        type: 'pin_withdrawal',
+        amount: totalPinCost,
+        date: Timestamp.fromDate(new Date(withdrawDateInput)),
+        pinType: withdrawPinsType,
+        pinCount: numPins
+      };
+
+      updateFields = {
+        totalWithdrawn: (inv.totalWithdrawn || 0) + totalPinCost,
+        soldPins: [...(inv.soldPins || []), newSoldPin],
+        history: [...(inv.history || []), newTransaction]
+      };
+    }
+
+    setWithdrawError(null);
+    setIsSubmitting(true);
+    try {
+      const invRef = doc(db, 'investments', inv.id!);
+      await updateDoc(invRef, updateFields);
       setWithdrawModal({ open: false });
       setWithdrawAmount('');
+      setWithdrawPinsCount('');
       setWithdrawError(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `investments/${inv.id}`);
@@ -680,11 +735,41 @@ export default function App() {
                   <X className="w-5 h-5" />
                 </button>
                 
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">Withdraw Funds</h3>
-                <p className="text-gray-500 mb-8">
-                  Withdraw from your {withdrawModal.investment?.pinType} investment. 
-                  Funds are taken from accumulated interest first, then capital.
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">Withdrawals & Sales</h3>
+                <p className="text-gray-500 mb-6">
+                  Select whether to withdraw cash or directly sell/withdraw PINs from your {withdrawModal.investment?.pinType} investment.
                 </p>
+
+                <div className="flex bg-gray-100 p-1 rounded-2xl mb-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWithdrawMode('funds');
+                      setWithdrawError(null);
+                    }}
+                    className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${
+                      withdrawMode === 'funds' 
+                        ? 'bg-white text-gray-900 shadow-sm' 
+                        : 'text-gray-500 hover:text-gray-900'
+                    }`}
+                  >
+                    Withdraw Funds
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWithdrawMode('pins');
+                      setWithdrawError(null);
+                    }}
+                    className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${
+                      withdrawMode === 'pins' 
+                        ? 'bg-white text-gray-900 shadow-sm' 
+                        : 'text-gray-500 hover:text-gray-900'
+                    }`}
+                  >
+                    Withdraw PINs
+                  </button>
+                </div>
 
                 <form onSubmit={handleWithdraw} className="space-y-6">
                   {withdrawError && (
@@ -693,18 +778,62 @@ export default function App() {
                       {withdrawError}
                     </div>
                   )}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Amount to Withdraw (₦)</label>
-                    <input 
-                      type="number"
-                      value={withdrawAmount}
-                      onChange={(e) => setWithdrawAmount(e.target.value)}
-                      placeholder="e.g. 1000"
-                      className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-red-600 transition-all font-medium"
-                      required
-                      autoFocus
-                    />
-                  </div>
+
+                  {withdrawMode === 'funds' ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Amount to Withdraw (₦)</label>
+                      <input 
+                        type="number"
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                        placeholder="e.g. 1000"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-red-600 transition-all font-medium"
+                        required
+                        autoFocus
+                      />
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Select Pin Type</label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {(Object.keys(PIN_CONFIGS) as PinType[]).map((type) => (
+                            <button
+                              key={type}
+                              type="button"
+                              onClick={() => setWithdrawPinsType(type)}
+                              className={`py-2 px-3 rounded-xl border text-center transition-all text-xs font-bold ${
+                                withdrawPinsType === type 
+                                  ? 'border-red-600 bg-red-50 text-red-600 font-extrabold' 
+                                  : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                              }`}
+                            >
+                              {type}
+                              <div className="text-[9px] font-normal text-gray-400">₦{PIN_CONFIGS[type].cost}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Number of PINs to Withdraw</label>
+                        <input 
+                          type="number"
+                          value={withdrawPinsCount}
+                          onChange={(e) => setWithdrawPinsCount(e.target.value)}
+                          placeholder="e.g. 5"
+                          className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-red-600 transition-all font-medium"
+                          required
+                          autoFocus
+                        />
+                        {withdrawPinsCount && !isNaN(parseInt(withdrawPinsCount)) && (
+                          <p className="mt-2 text-xs text-gray-500 font-semibold">
+                            Total equivalent cost: <span className="text-red-600 font-bold">₦{(parseInt(withdrawPinsCount) * PIN_CONFIGS[withdrawPinsType].cost).toLocaleString()}</span> (subtracted from net value)
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Withdrawal Date</label>
@@ -721,7 +850,7 @@ export default function App() {
                     disabled={isSubmitting}
                     className="w-full py-4 bg-red-600 text-white rounded-2xl font-bold hover:bg-red-700 transition-all active:scale-[0.98] disabled:opacity-50"
                   >
-                    {isSubmitting ? 'Processing...' : 'Confirm Withdrawal'}
+                    {isSubmitting ? 'Processing...' : (withdrawMode === 'funds' ? 'Confirm Withdrawal' : 'Confirm PIN Withdrawal')}
                   </button>
                 </form>
               </motion.div>
@@ -1012,8 +1141,8 @@ const InvestmentRow: React.FC<{
                 {(investment.history || []).sort((a, b) => b.date.toMillis() - a.date.toMillis()).map((t, i) => (
                   <div key={i} className="grid grid-cols-4 text-xs py-1">
                     <span className="text-gray-400">{new Date(t.date.toMillis()).toLocaleDateString()}</span>
-                    <span className={`font-medium ${t.type === 'deposit' ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {t.type.toUpperCase()}
+                    <span className={`font-medium ${t.type === 'deposit' ? 'text-emerald-400' : t.type === 'withdrawal' ? 'text-red-400' : 'text-amber-400'}`}>
+                      {t.type === 'deposit' ? 'DEPOSIT' : t.type === 'withdrawal' ? 'WITHDRAW' : `PIN WD (${t.pinCount || 0}x)`}
                     </span>
                     <span className="text-center text-gray-500">{t.pinType || '-'}</span>
                     <span className={`text-right font-bold ${t.type === 'deposit' ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -1071,6 +1200,22 @@ const InvestmentRow: React.FC<{
                 <div key={i} className="flex justify-between text-[10px] text-gray-500">
                   <span>{new Date(w.date.toMillis()).toLocaleString()}</span>
                   <span className="font-bold text-red-400">-₦{w.amount.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {investment.soldPins && investment.soldPins.length > 0 && (
+          <div className="mb-4 pt-3 border-t border-gray-100">
+            <p className="text-[10px] uppercase tracking-wider font-bold text-gray-400 mb-2">Directly Sold Pins History</p>
+            <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
+              {investment.soldPins.map((s, i) => (
+                <div key={i} className="flex justify-between text-[10px] text-gray-500">
+                  <span>
+                    {new Date(s.date.toMillis()).toLocaleDateString()} - {s.pinCount}x {s.pinType} Pin(s) @ ₦{s.costPerPin}
+                  </span>
+                  <span className="font-bold text-red-400">-₦{s.totalCost.toLocaleString()}</span>
                 </div>
               ))}
             </div>
