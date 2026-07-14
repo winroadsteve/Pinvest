@@ -36,7 +36,8 @@ import {
   Trash2,
   Download,
   FileText,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
@@ -144,6 +145,34 @@ export default function App() {
   const [editProfitPerPin, setEditProfitPerPin] = useState('');
   const [editDurationDays, setEditDurationDays] = useState('');
 
+  // Dynamic Card/PIN Prices
+  const [cardPrices, setCardPrices] = useState<Record<PinType, number>>(() => {
+    const saved = localStorage.getItem('pin_card_prices');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        // use default
+      }
+    }
+    return {
+      WAEC: PIN_CONFIGS.WAEC.cost,
+      NECO: PIN_CONFIGS.NECO.cost,
+      NABTEB: PIN_CONFIGS.NABTEB.cost,
+    };
+  });
+  const [showPricingSettings, setShowPricingSettings] = useState(false);
+
+  const handleUpdateCardPrice = (type: PinType, value: string) => {
+    const parsed = parseFloat(value);
+    const newPrices = {
+      ...cardPrices,
+      [type]: isNaN(parsed) ? 0 : parsed
+    };
+    setCardPrices(newPrices);
+    localStorage.setItem('pin_card_prices', JSON.stringify(newPrices));
+  };
+
   // Automatically set default profit per pin when a pin type is selected
   useEffect(() => {
     if (!topUpId) {
@@ -209,7 +238,7 @@ export default function App() {
 
     if (existingInv) {
       const newTotalAmount = existingInv.amount + numAmount;
-      const newPinCount = newTotalAmount / config.cost;
+      const newPinCount = newTotalAmount / cardPrices[selectedPin];
       
       const activeProfitPerPin = parseFloat(customProfitPerPin) || existingInv.interestPerPin || config.interest;
       
@@ -248,7 +277,7 @@ export default function App() {
       return;
     }
 
-    const pinCount = numAmount / config.cost;
+    const pinCount = numAmount / cardPrices[selectedPin];
     
     // New Calculation: > 500k earns 20k/month (120k for 6 months)
     let totalExpectedInterest = pinCount * profitPerPin;
@@ -309,7 +338,7 @@ export default function App() {
 
     setIsSubmitting(true);
     const config = PIN_CONFIGS[editPin];
-    const pinCount = numAmount / config.cost;
+    const pinCount = numAmount / cardPrices[editPin];
     
     const profitPerPin = parseFloat(editProfitPerPin) || config.interest;
     const durationDays = parseInt(editDurationDays) || 180;
@@ -414,7 +443,7 @@ export default function App() {
       const numPins = parseInt(withdrawPinsCount);
       if (isNaN(numPins) || numPins <= 0) return;
 
-      const costPerPin = PIN_CONFIGS[withdrawPinsType].cost;
+      const costPerPin = cardPrices[withdrawPinsType];
       const totalPinCost = numPins * costPerPin;
 
       if (totalPinCost > totalAvailable) {
@@ -599,7 +628,7 @@ export default function App() {
                             <span className="font-bold text-gray-900">{type}</span>
                             <span className="text-xs font-semibold text-blue-600">₦{PIN_CONFIGS[type].interest} profit/pin</span>
                           </div>
-                          <p className="text-xs text-gray-500">Cost: ₦{PIN_CONFIGS[type].cost.toLocaleString()}</p>
+                          <p className="text-xs text-gray-500">Cost: ₦{cardPrices[type].toLocaleString()}</p>
                         </button>
                       ))}
                     </div>
@@ -618,7 +647,7 @@ export default function App() {
                     />
                     {amount && (
                       <p className="mt-2 text-xs text-gray-500">
-                        Approx. {(parseFloat(amount) / PIN_CONFIGS[selectedPin].cost).toFixed(1)} pins
+                        Approx. {(parseFloat(amount) / cardPrices[selectedPin]).toFixed(1)} pins
                       </p>
                     )}
                   </div>
@@ -666,6 +695,55 @@ export default function App() {
                     {isSubmitting ? 'Processing...' : (topUpId ? 'Confirm Top-up' : 'Start Investment')}
                   </button>
                 </form>
+
+                {/* Collapsible Card Prices Settings */}
+                <div className="border-t border-gray-100 pt-6 mt-6">
+                  <button
+                    type="button"
+                    onClick={() => setShowPricingSettings(!showPricingSettings)}
+                    className="flex items-center justify-between w-full text-sm font-bold text-gray-500 hover:text-gray-900 transition-all"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Settings className="w-4 h-4 text-blue-600" />
+                      Card Cost Settings
+                    </span>
+                    <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider">
+                      {showPricingSettings ? 'Hide' : 'Configure'}
+                    </span>
+                  </button>
+                  
+                  <AnimatePresence>
+                    {showPricingSettings && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden mt-4 space-y-4"
+                      >
+                        <p className="text-xs text-gray-500 leading-relaxed">
+                          Adjust the base cost of exam PIN cards. New investments and withdrawals will use these updated prices.
+                        </p>
+                        <div className="space-y-3 pt-1">
+                          {(Object.keys(cardPrices) as PinType[]).map((type) => (
+                            <div key={type} className="flex items-center justify-between gap-4 bg-gray-50 p-3 rounded-2xl border border-gray-100">
+                              <span className="text-xs font-bold text-gray-800">{type} Card Cost</span>
+                              <div className="relative w-32">
+                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs">₦</span>
+                                <input
+                                  type="number"
+                                  value={cardPrices[type] === 0 ? '' : cardPrices[type]}
+                                  onChange={(e) => handleUpdateCardPrice(type, e.target.value)}
+                                  placeholder="0"
+                                  className="w-full pl-7 pr-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all text-right"
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
             </div>
 
@@ -809,7 +887,7 @@ export default function App() {
                               }`}
                             >
                               {type}
-                              <div className="text-[9px] font-normal text-gray-400">₦{PIN_CONFIGS[type].cost}</div>
+                              <div className="text-[9px] font-normal text-gray-400">₦{cardPrices[type]}</div>
                             </button>
                           ))}
                         </div>
@@ -828,7 +906,7 @@ export default function App() {
                         />
                         {withdrawPinsCount && !isNaN(parseInt(withdrawPinsCount)) && (
                           <p className="mt-2 text-xs text-gray-500 font-semibold">
-                            Total equivalent cost: <span className="text-red-600 font-bold">₦{(parseInt(withdrawPinsCount) * PIN_CONFIGS[withdrawPinsType].cost).toLocaleString()}</span> (subtracted from net value)
+                            Total equivalent cost: <span className="text-red-600 font-bold">₦{(parseInt(withdrawPinsCount) * cardPrices[withdrawPinsType]).toLocaleString()}</span> (subtracted from net value)
                           </p>
                         )}
                       </div>
