@@ -1,0 +1,10 @@
+{
+  "projectId": "gmail-ref-no-extractor",
+  "appId": "1:480860550332:web:0c900d41f688e006b40cb9",
+  "apiKey": "AIzaSyArqRZoIsXFdrQo5f1bQ5n0z1M86xiO9mM",
+  "authDomain": "ref-no-extractor.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-f6a417e5-74dd-4143-9a2b-ab5c96300a1e",
+  "storageBucket": "gmail-ref-no-extractor.firebasestorage.app",
+  "messagingSenderId": "480860550332",
+  "measurementId": ""
+}

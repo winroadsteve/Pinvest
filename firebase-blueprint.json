@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "Investment": {
+      "title": "Investment",
+      "description": "Represents an investor's stake in a specific pin type.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The UID of the investor." },
+        "investorName": { "type": "string", "description": "Full name of the investor." },
+        "pinType": { "type": "string", "enum": ["WAEC", "NECO", "NABTEB"], "description": "Type of exam pin." },
+        "amount": { "type": "number", "description": "Total amount invested in Naira." },
+        "pinCount": { "type": "number", "description": "Equivalent number of pins." },
+        "interestPerPin": { "type": "number", "description": "Interest earned per pin." },
+        "totalExpectedInterest": { "type": "number", "description": "Total interest at the end of 6 months." },
+        "startDate": { "type": "string", "format": "date-time", "description": "When the investment started." },
+        "payoutDate": { "type": "string", "format": "date-time", "description": "When the investment matures (6 months later)." },
+        "status": { "type": "string", "enum": ["active", "completed"], "description": "Current status of the investment." },
+        "totalWithdrawn": { "type": "number", "description": "Total amount withdrawn so far." },
+        "withdrawals": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "amount": { "type": "number" },
+              "date": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      },
+      "required": ["userId", "investorName", "pinType", "amount", "pinCount", "interestPerPin", "totalExpectedInterest", "startDate", "payoutDate", "status", "totalWithdrawn"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["investor", "admin"] }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "/investments/{investmentId}": {
+      "schema": "Investment",
+      "description": "Collection of all investments."
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile data."
+    }
+  }
+}

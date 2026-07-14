@@ -1,0 +1,5 @@
+{
+  "name": "PinVest",
+  "description": "Investment tracking platform for WAEC, NECO, and NABTEB exam pins with real-time interest accumulation.",
+  "requestFramePermissions": []
+}
