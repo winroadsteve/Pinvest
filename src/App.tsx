@@ -37,13 +37,25 @@ import {
   Download,
   FileText,
   Image as ImageIcon,
-  Settings
+  Settings,
+  Lock,
+  ShieldCheck,
+  Shield,
+  Users,
+  Award,
+  Sparkles,
+  Check,
+  Phone,
+  Mail,
+  ArrowUpRight,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import { db } from './firebase';
 import { PinType, PIN_CONFIGS, Investment, TransactionRecord } from './types';
+import happyInvestorImg from './assets/images/happy_investor_pinvest_1784802210426.jpg';
 
 // --- Constants ---
 const GUEST_USER_ID = 'public_investor';
@@ -144,6 +156,35 @@ export default function App() {
   const [editDate, setEditDate] = useState('');
   const [editProfitPerPin, setEditProfitPerPin] = useState('');
   const [editDurationDays, setEditDurationDays] = useState('');
+
+  // Admin & Public Access State
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    return sessionStorage.getItem('pinvest_admin_auth') === 'true';
+  });
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState<boolean>(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState<string>('');
+  const [adminPasswordError, setAdminPasswordError] = useState<string | null>(null);
+  const [showContactModal, setShowContactModal] = useState<boolean>(false);
+  const [showInvestorsList, setShowInvestorsList] = useState<boolean>(false);
+
+  const handleAdminLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanPass = adminPasswordInput.trim();
+    if (cleanPass === 'pinvest2026' || cleanPass === 'admin123' || cleanPass === 'admin') {
+      setIsAdmin(true);
+      sessionStorage.setItem('pinvest_admin_auth', 'true');
+      setShowAdminAuthModal(false);
+      setAdminPasswordInput('');
+      setAdminPasswordError(null);
+    } else {
+      setAdminPasswordError('Incorrect admin password.');
+    }
+  };
+
+  const handleAdminLogout = () => {
+    setIsAdmin(false);
+    sessionStorage.removeItem('pinvest_admin_auth');
+  };
 
   // Dynamic Card/PIN Prices
   const [cardPrices, setCardPrices] = useState<Record<PinType, number>>(() => {
@@ -374,10 +415,110 @@ export default function App() {
   };
 
   const handleDelete = async (id: string) => {
+    const inv = investments.find(i => i.id === id);
+    const name = inv ? inv.investorName : 'this investment';
+    if (!window.confirm(`Are you sure you want to permanently delete the investment for ${name}? This action cannot be undone.`)) return;
+
     try {
       await deleteDoc(doc(db, 'investments', id));
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `investments/${id}`);
+    }
+  };
+
+  const handleDeleteSoldPin = async (investmentId: string, soldPinIndex: number) => {
+    const inv = investments.find(i => i.id === investmentId);
+    if (!inv) return;
+
+    const soldPins = [...(inv.soldPins || [])];
+    const removedPin = soldPins[soldPinIndex];
+    if (!removedPin) return;
+
+    if (!window.confirm(`Are you sure you want to delete this direct sale of ${removedPin.pinCount}x ${removedPin.pinType} PIN(s)? This will reverse the withdrawal and restore the investment value.`)) return;
+
+    try {
+      soldPins.splice(soldPinIndex, 1);
+
+      // Remove corresponding transaction from history
+      const history = [...(inv.history || [])];
+      const historyIndex = history.findIndex(t => 
+        t.type === 'pin_withdrawal' && 
+        t.pinType === removedPin.pinType && 
+        t.pinCount === removedPin.pinCount && 
+        t.amount === removedPin.totalCost &&
+        Math.abs(t.date.toMillis() - removedPin.date.toMillis()) < 5000
+      );
+
+      if (historyIndex !== -1) {
+        history.splice(historyIndex, 1);
+      } else {
+        const fallbackIndex = history.findIndex(t => 
+          t.type === 'pin_withdrawal' && 
+          t.pinType === removedPin.pinType && 
+          t.pinCount === removedPin.pinCount && 
+          t.amount === removedPin.totalCost
+        );
+        if (fallbackIndex !== -1) {
+          history.splice(fallbackIndex, 1);
+        }
+      }
+
+      const newTotalWithdrawn = Math.max(0, (inv.totalWithdrawn || 0) - removedPin.totalCost);
+
+      const invRef = doc(db, 'investments', investmentId);
+      await updateDoc(invRef, {
+        soldPins: soldPins,
+        history: history,
+        totalWithdrawn: newTotalWithdrawn
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `investments/${investmentId}/soldPins`);
+    }
+  };
+
+  const handleDeleteWithdrawal = async (investmentId: string, withdrawalIndex: number) => {
+    const inv = investments.find(i => i.id === investmentId);
+    if (!inv) return;
+
+    const withdrawals = [...(inv.withdrawals || [])];
+    const removedWithdrawal = withdrawals[withdrawalIndex];
+    if (!removedWithdrawal) return;
+
+    if (!window.confirm(`Are you sure you want to delete this withdrawal of ₦${removedWithdrawal.amount.toLocaleString()}? This will restore the withdrawn amount back to the investment value.`)) return;
+
+    try {
+      withdrawals.splice(withdrawalIndex, 1);
+
+      // Remove corresponding transaction from history
+      const history = [...(inv.history || [])];
+      const historyIndex = history.findIndex(t => 
+        t.type === 'withdrawal' && 
+        t.amount === removedWithdrawal.amount &&
+        Math.abs(t.date.toMillis() - removedWithdrawal.date.toMillis()) < 5000
+      );
+
+      if (historyIndex !== -1) {
+        history.splice(historyIndex, 1);
+      } else {
+        const fallbackIndex = history.findIndex(t => 
+          t.type === 'withdrawal' && 
+          t.amount === removedWithdrawal.amount
+        );
+        if (fallbackIndex !== -1) {
+          history.splice(fallbackIndex, 1);
+        }
+      }
+
+      const newTotalWithdrawn = Math.max(0, (inv.totalWithdrawn || 0) - removedWithdrawal.amount);
+
+      const invRef = doc(db, 'investments', investmentId);
+      await updateDoc(invRef, {
+        withdrawals: withdrawals,
+        history: history,
+        totalWithdrawn: newTotalWithdrawn
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `investments/${investmentId}/withdrawals`);
     }
   };
 
@@ -532,252 +673,567 @@ export default function App() {
     <ErrorBoundary>
       <div className="min-h-screen bg-[#F8F9FA] pb-20">
         {/* Header */}
-        <header className="bg-white border-b border-gray-100 sticky top-0 z-10">
-          <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between">
+        <header className="bg-white border-b border-gray-100 sticky top-0 z-20">
+          <div className="max-w-5xl mx-auto px-6 h-20 flex items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <TrendingUp className="w-6 h-6 text-blue-600" />
               <span className="text-xl font-bold text-gray-900">PinVest</span>
             </div>
-            <div className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-full text-xs font-bold">
-              <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
-              LIVE TRACKING
+            <div className="flex items-center gap-3">
+              <div className="hidden sm:flex items-center gap-2 px-3.5 py-1.5 bg-blue-50 text-blue-600 rounded-full text-xs font-bold">
+                <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
+                LIVE RATES
+              </div>
+
+              {/* Admin Mode Controls */}
+              {!isAdmin ? (
+                <button 
+                  onClick={() => setShowAdminAuthModal(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-full text-xs font-bold transition-all shadow-sm"
+                >
+                  <Lock className="w-3.5 h-3.5 text-blue-400" />
+                  Admin Login
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-50 text-emerald-700 rounded-full text-xs font-bold border border-emerald-200">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    Admin Mode Active
+                  </span>
+                  <button 
+                    onClick={handleAdminLogout}
+                    className="px-3 py-1.5 text-gray-500 hover:text-red-600 rounded-lg text-xs font-bold transition-colors"
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>
 
         <main className="max-w-5xl mx-auto px-6 py-8">
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
-            <StatCard 
-              label="Total Capital" 
-              value={`₦${stats.totalInvested.toLocaleString()}`} 
-              icon={<Wallet className="w-5 h-5" />}
-              color="blue"
-            />
-            <StatCard 
-              label="Grown Interest" 
-              value={`₦${stats.totalAccumulated.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} 
-              icon={<Coins className="w-5 h-5" />}
-              color="green"
-              subValue={`Daily: +₦${stats.dailyAccrual.toFixed(2)}`}
-            />
-            <StatCard 
-              label="Total Withdrawn" 
-              value={`₦${stats.totalWithdrawn.toLocaleString()}`} 
-              icon={<ArrowDownCircle className="w-5 h-5" />}
-              color="red"
-            />
-            <StatCard 
-              label="Net Balance" 
-              value={`₦${stats.netBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`} 
-              icon={<PieChart className="w-5 h-5" />}
-              color="purple"
-            />
-          </div>
+          {/* Hero Header with Happy Investor Picture & Catchy Mantra */}
+          <div className="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 rounded-[32px] p-8 md:p-10 text-white mb-10 shadow-xl overflow-hidden relative border border-blue-800/40">
+            {/* Subtle background glow circles */}
+            <div className="absolute -top-24 -right-24 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-24 -left-24 w-96 h-96 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
-            {/* Investment Form */}
-            <div className="lg:col-span-1">
-              <div className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 sticky top-28">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                    <Plus className="w-5 h-5 text-blue-600" />
-                    {topUpId ? 'Top-up Investment' : 'New Investment'}
-                  </h2>
-                  {topUpId && (
-                    <button 
-                      onClick={() => {
-                        setTopUpId(null);
-                        setInvestorName('');
-                        setAmount('');
-                      }}
-                      className="text-[10px] font-bold text-red-600 hover:underline uppercase tracking-wider"
-                    >
-                      Cancel
-                    </button>
-                  )}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center relative z-10">
+              <div className="lg:col-span-7 space-y-5">
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 bg-white/10 backdrop-blur-md rounded-full text-xs font-bold text-amber-300 border border-white/10">
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>Nigeria's Premier Exam PIN Arbitrage Pool</span>
                 </div>
-                <form onSubmit={handleInvest} className="space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Investor Name</label>
-                    <input 
-                      type="text"
-                      value={investorName}
-                      onChange={(e) => setInvestorName(e.target.value)}
-                      placeholder="Enter full name"
-                      className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
-                      required
-                    />
-                  </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Select Pin Type</label>
-                    <div className="grid grid-cols-1 gap-3">
-                      {(Object.keys(PIN_CONFIGS) as PinType[]).map((type) => (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setSelectedPin(type)}
-                          className={`p-4 rounded-2xl border-2 text-left transition-all ${
-                            selectedPin === type 
-                              ? 'border-blue-600 bg-blue-50' 
-                              : 'border-gray-100 hover:border-gray-200'
-                          }`}
-                        >
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="font-bold text-gray-900">{type}</span>
-                            <span className="text-xs font-semibold text-blue-600">₦{PIN_CONFIGS[type].interest} profit/pin</span>
-                          </div>
-                          <p className="text-xs text-gray-500">Cost: ₦{cardPrices[type].toLocaleString()}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white leading-[1.15]">
+                  Powering Smart Capital. <br />
+                  <span className="bg-gradient-to-r from-amber-300 via-emerald-300 to-teal-200 bg-clip-text text-transparent">
+                    Growing Daily Wealth.
+                  </span>
+                </h1>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Investment Amount (₦)</label>
-                    <input 
-                      id="investment-amount"
-                      type="number"
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder="Enter amount"
-                      className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
-                      required
-                    />
-                    {amount && (
-                      <p className="mt-2 text-xs text-gray-500">
-                        Approx. {(parseFloat(amount) / cardPrices[selectedPin]).toFixed(1)} pins
-                      </p>
-                    )}
-                  </div>
+                <p className="text-sm md:text-base text-blue-100/90 leading-relaxed font-normal max-w-xl">
+                  Turn high exam season demand into steady daily yields. PinVest finances wholesale WAEC, NECO & NABTEB scratch card procurement so you earn guaranteed daily profit with total capital security.
+                </p>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Start Date</label>
-                    <input 
-                      type="date"
-                      value={startDateInput}
-                      onChange={(e) => setStartDateInput(e.target.value)}
-                      className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
-                      required
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Profit per Pin (₦)</label>
-                      <input 
-                        type="number"
-                        value={customProfitPerPin}
-                        onChange={(e) => setCustomProfitPerPin(e.target.value)}
-                        placeholder="e.g. 100"
-                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Duration (Days)</label>
-                      <input 
-                        type="number"
-                        value={customDurationDays}
-                        onChange={(e) => setCustomDurationDays(e.target.value)}
-                        placeholder="e.g. 180"
-                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <button 
-                    disabled={isSubmitting}
-                    className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-blue-100"
-                  >
-                    {isSubmitting ? 'Processing...' : (topUpId ? 'Confirm Top-up' : 'Start Investment')}
-                  </button>
-                </form>
-
-                {/* Collapsible Card Prices Settings */}
-                <div className="border-t border-gray-100 pt-6 mt-6">
+                <div className="flex flex-wrap items-center gap-4 pt-2">
                   <button
-                    type="button"
-                    onClick={() => setShowPricingSettings(!showPricingSettings)}
-                    className="flex items-center justify-between w-full text-sm font-bold text-gray-500 hover:text-gray-900 transition-all"
+                    onClick={() => setShowContactModal(true)}
+                    className="px-6 py-3.5 bg-amber-400 hover:bg-amber-300 text-gray-950 font-extrabold rounded-2xl text-xs transition-all shadow-lg shadow-amber-900/20 flex items-center gap-2 active:scale-95"
                   >
-                    <span className="flex items-center gap-2">
-                      <Settings className="w-4 h-4 text-blue-600" />
-                      Card Cost Settings
-                    </span>
-                    <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider">
-                      {showPricingSettings ? 'Hide' : 'Configure'}
-                    </span>
+                    <Phone className="w-4 h-4" />
+                    Start Investing Today
                   </button>
+                  <button
+                    onClick={() => setShowInvestorsList(!showInvestorsList)}
+                    className="px-6 py-3.5 bg-white/10 hover:bg-white/20 text-white font-bold rounded-2xl text-xs transition-all border border-white/20 flex items-center gap-2 backdrop-blur-sm"
+                  >
+                    <Users className="w-4 h-4 text-emerald-300" />
+                    {showInvestorsList ? 'Hide Active Portfolios' : 'View Present Investors'}
+                  </button>
+                </div>
+
+                <div className="pt-4 flex flex-wrap items-center gap-6 border-t border-white/10 text-xs text-blue-200">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>100% Capital Safety</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-amber-300 shrink-0" />
+                    <span>Daily Profit Accrual</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Award className="w-4 h-4 text-blue-300 shrink-0" />
+                    <span>Audited Statements</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="lg:col-span-5 relative">
+                <div className="relative rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl group">
+                  <img 
+                    src={happyInvestorImg} 
+                    alt="Happy PinVest Investor" 
+                    className="w-full h-64 sm:h-72 object-cover object-top group-hover:scale-105 transition-transform duration-500"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-gray-950/80 via-transparent to-transparent" />
                   
-                  <AnimatePresence>
-                    {showPricingSettings && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: 'auto', opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        className="overflow-hidden mt-4 space-y-4"
-                      >
-                        <p className="text-xs text-gray-500 leading-relaxed">
-                          Adjust the base cost of exam PIN cards. New investments and withdrawals will use these updated prices.
-                        </p>
-                        <div className="space-y-3 pt-1">
-                          {(Object.keys(cardPrices) as PinType[]).map((type) => (
-                            <div key={type} className="flex items-center justify-between gap-4 bg-gray-50 p-3 rounded-2xl border border-gray-100">
-                              <span className="text-xs font-bold text-gray-800">{type} Card Cost</span>
-                              <div className="relative w-32">
-                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs">₦</span>
-                                <input
-                                  type="number"
-                                  value={cardPrices[type] === 0 ? '' : cardPrices[type]}
-                                  onChange={(e) => handleUpdateCardPrice(type, e.target.value)}
-                                  placeholder="0"
-                                  className="w-full pl-7 pr-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all text-right"
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                  {/* Overlay Badge */}
+                  <div className="absolute bottom-4 left-4 right-4 bg-white/15 backdrop-blur-md p-3 rounded-xl border border-white/20 flex items-center justify-between">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-xs shadow-md">
+                        <Check className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-white">Satisfied Investor</p>
+                        <p className="text-[10px] text-emerald-300 font-semibold">Daily Yield Verified</p>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-extrabold bg-emerald-400 text-gray-950 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                      Active
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* Investment List */}
-            <div className="lg:col-span-2">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-gray-900">Your Portfolio</h2>
-                <span className="text-sm text-gray-500">{investments.length} Active</span>
+          {/* Present Rates & Daily Profit Dashboard */}
+          <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100 mb-10">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 pb-6 border-b border-gray-100">
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-xs font-bold mb-2">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Official Daily Rates & Yields
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900">Current Exam PIN Rates & Daily Yield</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Transparent rate cards based on real WAEC, NECO & NABTEB scratch card procurement.
+                </p>
+              </div>
+              <div className="text-left md:text-right">
+                <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Profit Rate</span>
+                <span className="text-sm font-extrabold text-blue-600">₦100 Profit / PIN / Day</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {(['WAEC', 'NECO', 'NABTEB'] as PinType[]).map((type) => (
+                <div key={type} className="bg-gradient-to-b from-gray-50 to-white p-6 rounded-2xl border border-gray-100 relative overflow-hidden group hover:border-blue-200 transition-all shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <span className="text-xs font-bold px-2.5 py-1 bg-blue-600 text-white rounded-lg">{type} PIN</span>
+                    <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-lg flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3" />
+                      Active Yield
+                    </span>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                    <div>
+                      <p className="text-[10px] text-gray-400 uppercase font-bold">Base Card Cost</p>
+                      <p className="text-xl font-extrabold text-gray-900">₦{cardPrices[type].toLocaleString()}</p>
+                    </div>
+                    <div className="flex justify-between items-center text-xs pt-2 border-t border-gray-100">
+                      <span className="text-gray-500 font-medium">Daily Return</span>
+                      <span className="font-bold text-blue-600">₦100 / pin / day</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-gray-500 font-medium">Monthly Return Estimate</span>
+                      <span className="font-bold text-emerald-600">~₦3,000 / pin / mo</span>
+                    </div>
+                  </div>
+                  <div className="bg-blue-50/60 p-2.5 rounded-xl text-[11px] text-blue-800 font-medium leading-tight">
+                    High demand during {type} registration & result checking cycles.
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* High Yield Tier Notice */}
+            <div className="mt-6 bg-gradient-to-r from-blue-900 to-indigo-900 text-white p-6 rounded-2xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center shrink-0">
+                  <Award className="w-6 h-6 text-amber-300" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-base text-amber-200 flex items-center gap-2">
+                    High-Yield Premium Investor Tier (&gt; ₦500,000)
+                  </h4>
+                  <p className="text-xs text-blue-100 leading-relaxed mt-0.5">
+                    Investments above ₦500k earn a fixed <strong className="text-white">₦20,000 guaranteed profit monthly</strong> (₦120,000 total per 6-month cycle).
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => isAdmin ? window.scrollTo({ top: 300, behavior: 'smooth' }) : setShowContactModal(true)}
+                className="px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-gray-900 rounded-xl font-extrabold text-xs transition-all shrink-0 shadow-md flex items-center gap-1.5"
+              >
+                {isAdmin ? 'Add Premium Investment' : 'Inquire Premium Tier'}
+                <ArrowUpRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Why Invest with Pinvest? */}
+          <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100 mb-10">
+            <div className="text-center max-w-2xl mx-auto mb-8">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-xs font-bold mb-3">
+                <Shield className="w-3.5 h-3.5" />
+                Safe & Transparent Exam PIN Capital Growth
+              </div>
+              <h2 className="text-2xl md:text-3xl font-extrabold text-gray-900 mb-3">Why You Should Invest With PinVest</h2>
+              <p className="text-gray-500 text-xs md:text-sm leading-relaxed">
+                PinVest finances the wholesale procurement and retail distribution of WAEC, NECO, and NABTEB examination scratch cards across Nigeria.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100 hover:bg-blue-50/40 hover:border-blue-100 transition-all group">
+                <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <Award className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-gray-900 mb-2">High Recurrent Demand</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Over 3 million candidates register for national examinations annually. Exam cards are non-discretionary and yield high turnover.
+                </p>
               </div>
 
-              <div className="space-y-4">
-                <AnimatePresence mode="popLayout">
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100 hover:bg-emerald-50/40 hover:border-emerald-100 transition-all group">
+                <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-gray-900 mb-2">Guaranteed Daily Accrual</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Returns grow continuously second-by-second with full daily interest rate formulas. Track your gains live anytime.
+                </p>
+              </div>
+
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100 hover:bg-purple-50/40 hover:border-purple-100 transition-all group">
+                <div className="w-10 h-10 bg-purple-100 text-purple-600 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <Coins className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-gray-900 mb-2">Dual Exit & PIN Resale</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Withdraw yields in cash directly to your bank account OR convert profits into physical/e-PIN cards to sell at retail price.
+                </p>
+              </div>
+
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100 hover:bg-amber-50/40 hover:border-amber-100 transition-all group">
+                <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <h3 className="font-bold text-gray-900 mb-2">Audited PDF Receipts</h3>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Export official PDF & PNG statements for any active account anytime with complete breakdown of deposits, yields & PIN sales.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Present Active Investors Section (Click to View) */}
+          <div className="bg-white p-8 rounded-[32px] shadow-sm border border-gray-100 mb-10">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                  <Users className="w-5 h-5 text-blue-600" />
+                  Present Active Investors
+                </h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  Transparent record of currently active investor portfolios and daily yield tracking.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowInvestorsList(!showInvestorsList)}
+                className={`px-5 py-2.5 rounded-2xl font-bold text-xs transition-all flex items-center gap-2 ${
+                  showInvestorsList 
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-100' 
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
+                }`}
+              >
+                <Users className="w-4 h-4" />
+                {showInvestorsList ? 'Hide Present Investors' : `Click to View Present Investors (${investments.length})`}
+                <ChevronDown className={`w-4 h-4 transition-transform ${showInvestorsList ? 'rotate-180' : ''}`} />
+              </button>
+            </div>
+
+            <AnimatePresence>
+              {showInvestorsList && (
+                <motion.div
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden mt-6 space-y-4 pt-4 border-t border-gray-100"
+                >
                   {investments.length === 0 ? (
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className="bg-white p-12 rounded-[32px] border border-dashed border-gray-200 text-center"
-                    >
-                      <Wallet className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                      <p className="text-gray-500">No investments yet. Start by adding one!</p>
-                    </motion.div>
+                    <div className="p-8 text-center bg-gray-50 rounded-2xl border border-dashed border-gray-200">
+                      <Users className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                      <p className="text-xs text-gray-500 font-medium">No active investor accounts found.</p>
+                    </div>
                   ) : (
                     investments.sort((a, b) => b.startDate.toMillis() - a.startDate.toMillis()).map((inv) => (
                       <InvestmentRow 
                         key={inv.id} 
                         investment={inv} 
+                        isAdmin={isAdmin}
                         onWithdraw={() => setWithdrawModal({ open: true, investment: inv })}
                         onEdit={() => openEditModal(inv)}
                         onDelete={() => handleDelete(inv.id!)}
                         onAddFunds={() => handleSelectForTopUp(inv.id!, inv.investorName, inv.pinType)}
+                        onDeleteSoldPin={(soldPinIndex) => handleDeleteSoldPin(inv.id!, soldPinIndex)}
+                        onDeleteWithdrawal={(withdrawalIndex) => handleDeleteWithdrawal(inv.id!, withdrawalIndex)}
+                        onRequestAdminAuth={() => setShowAdminAuthModal(true)}
                       />
                     ))
                   )}
-                </AnimatePresence>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+            {/* Left Column: Admin Form OR Public Investment Inquiry */}
+            <div className="lg:col-span-1">
+              {isAdmin ? (
+                /* Admin Investment Form & Card Pricing Controls */
+                <div className="bg-white p-6 rounded-[32px] shadow-sm border border-gray-100 sticky top-28">
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
+                      <Plus className="w-5 h-5 text-blue-600" />
+                      {topUpId ? 'Top-up Investment' : 'New Investment'}
+                    </h2>
+                    {topUpId && (
+                      <button 
+                        onClick={() => {
+                          setTopUpId(null);
+                          setInvestorName('');
+                          setAmount('');
+                        }}
+                        className="text-[10px] font-bold text-red-600 hover:underline uppercase tracking-wider"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                  <form onSubmit={handleInvest} className="space-y-6">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Investor Name</label>
+                      <input 
+                        type="text"
+                        value={investorName}
+                        onChange={(e) => setInvestorName(e.target.value)}
+                        placeholder="Enter full name"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Select Pin Type</label>
+                      <div className="grid grid-cols-1 gap-3">
+                        {(Object.keys(PIN_CONFIGS) as PinType[]).map((type) => (
+                          <button
+                            key={type}
+                            type="button"
+                            onClick={() => setSelectedPin(type)}
+                            className={`p-4 rounded-2xl border-2 text-left transition-all ${
+                              selectedPin === type 
+                                ? 'border-blue-600 bg-blue-50' 
+                                : 'border-gray-100 hover:border-gray-200'
+                            }`}
+                          >
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="font-bold text-gray-900">{type}</span>
+                              <span className="text-xs font-semibold text-blue-600">₦{PIN_CONFIGS[type].interest} profit/pin</span>
+                            </div>
+                            <p className="text-xs text-gray-500">Cost: ₦{cardPrices[type].toLocaleString()}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Investment Amount (₦)</label>
+                      <input 
+                        id="investment-amount"
+                        type="number"
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        placeholder="Enter amount"
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                      {amount && (
+                        <p className="mt-2 text-xs text-gray-500">
+                          Approx. {(parseFloat(amount) / cardPrices[selectedPin]).toFixed(1)} pins
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Start Date</label>
+                      <input 
+                        type="date"
+                        value={startDateInput}
+                        onChange={(e) => setStartDateInput(e.target.value)}
+                        className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                        required
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Profit per Pin (₦)</label>
+                        <input 
+                          type="number"
+                          value={customProfitPerPin}
+                          onChange={(e) => setCustomProfitPerPin(e.target.value)}
+                          placeholder="e.g. 100"
+                          className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Duration (Days)</label>
+                        <input 
+                          type="number"
+                          value={customDurationDays}
+                          onChange={(e) => setCustomDurationDays(e.target.value)}
+                          placeholder="e.g. 180"
+                          className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all font-medium"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <button 
+                      disabled={isSubmitting}
+                      className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-blue-100"
+                    >
+                      {isSubmitting ? 'Processing...' : (topUpId ? 'Confirm Top-up' : 'Start Investment')}
+                    </button>
+                  </form>
+
+                  {/* Collapsible Card Prices Settings */}
+                  <div className="border-t border-gray-100 pt-6 mt-6">
+                    <button
+                      type="button"
+                      onClick={() => setShowPricingSettings(!showPricingSettings)}
+                      className="flex items-center justify-between w-full text-sm font-bold text-gray-500 hover:text-gray-900 transition-all"
+                    >
+                      <span className="flex items-center gap-2">
+                        <Settings className="w-4 h-4 text-blue-600" />
+                        Card Cost Settings
+                      </span>
+                      <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider">
+                        {showPricingSettings ? 'Hide' : 'Configure'}
+                      </span>
+                    </button>
+                    
+                    <AnimatePresence>
+                      {showPricingSettings && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: 'auto', opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="overflow-hidden mt-4 space-y-4"
+                        >
+                          <p className="text-xs text-gray-500 leading-relaxed">
+                            Adjust the base cost of exam PIN cards. New investments and withdrawals will use these updated prices.
+                          </p>
+                          <div className="space-y-3 pt-1">
+                            {(Object.keys(cardPrices) as PinType[]).map((type) => (
+                              <div key={type} className="flex items-center justify-between gap-4 bg-gray-50 p-3 rounded-2xl border border-gray-100">
+                                <span className="text-xs font-bold text-gray-800">{type} Card Cost</span>
+                                <div className="relative w-32">
+                                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs">₦</span>
+                                  <input
+                                    type="number"
+                                    value={cardPrices[type] === 0 ? '' : cardPrices[type]}
+                                    onChange={(e) => handleUpdateCardPrice(type, e.target.value)}
+                                    placeholder="0"
+                                    className="w-full pl-7 pr-3 py-1.5 bg-white border border-gray-200 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none transition-all text-right"
+                                  />
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </div>
+              ) : (
+                /* Public Visitor Action Card */
+                <div className="bg-gradient-to-b from-blue-900 via-indigo-900 to-gray-900 text-white p-8 rounded-[32px] shadow-xl sticky top-28 space-y-6">
+                  <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center">
+                    <Sparkles className="w-6 h-6 text-amber-300" />
+                  </div>
+
+                  <div>
+                    <h3 className="text-2xl font-bold text-white mb-2">Start Investing with PinVest</h3>
+                    <p className="text-xs text-blue-100 leading-relaxed">
+                      Enroll in WAEC, NECO & NABTEB examination scratch card pools. Guaranteed daily interest accruals with full capital security.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3 bg-white/5 p-4 rounded-2xl border border-white/10">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-blue-200">Daily Return Rate</span>
+                      <span className="font-bold text-emerald-400">₦100 / PIN / Day</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-blue-200">Tier &gt; ₦500k Profit</span>
+                      <span className="font-bold text-amber-300">₦20,000 / Mo</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-blue-200">Liquidity Options</span>
+                      <span className="font-bold text-white">Cash or e-PIN Cards</span>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => setShowContactModal(true)}
+                    className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-gray-950 font-extrabold rounded-2xl text-xs transition-all shadow-lg shadow-emerald-900/30 flex items-center justify-center gap-2"
+                  >
+                    <Phone className="w-4 h-4" />
+                    How to Invest / Contact Desk
+                  </button>
+
+                  <div className="pt-4 border-t border-white/10 text-center">
+                    <p className="text-[11px] text-blue-200">
+                      Are you the PinVest Administrator?{' '}
+                      <button
+                        onClick={() => setShowAdminAuthModal(true)}
+                        className="text-amber-300 hover:underline font-bold"
+                      >
+                        Login to Admin Panel
+                      </button>
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right Column: Portfolio Overview Banner */}
+            <div className="lg:col-span-2">
+              <div className="bg-white p-8 rounded-[32px] border border-gray-100 shadow-sm flex flex-col items-center justify-center text-center space-y-4 py-12">
+                <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center">
+                  <TrendingUp className="w-8 h-8" />
+                </div>
+                <div className="max-w-md">
+                  <h3 className="text-xl font-bold text-gray-900 mb-1">Live Yield & Portfolio Monitoring</h3>
+                  <p className="text-xs text-gray-500 leading-relaxed">
+                    All investments accrue daily profits automatically. Click <strong className="text-gray-800">"View Present Investors"</strong> above to inspect active investor portfolios, daily accrued yields, and transaction statements.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowInvestorsList(!showInvestorsList)}
+                  className="px-6 py-3 bg-blue-600 text-white rounded-2xl font-bold text-xs hover:bg-blue-700 transition-all shadow-md shadow-blue-100 flex items-center gap-2"
+                >
+                  <Users className="w-4 h-4" />
+                  {showInvestorsList ? 'Hide Active Investors' : `View Active Investors (${investments.length})`}
+                </button>
               </div>
             </div>
           </div>
@@ -1054,6 +1510,156 @@ export default function App() {
             </div>
           )}
         </AnimatePresence>
+
+        {/* Admin Password Authentication Modal */}
+        <AnimatePresence>
+          {showAdminAuthModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => {
+                  setShowAdminAuthModal(false);
+                  setAdminPasswordError(null);
+                }}
+                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="relative bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl border border-gray-100 z-10"
+              >
+                <button 
+                  onClick={() => {
+                    setShowAdminAuthModal(false);
+                    setAdminPasswordError(null);
+                  }}
+                  className="absolute top-6 right-6 p-2 text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-4">
+                  <Lock className="w-6 h-6" />
+                </div>
+                
+                <h3 className="text-xl font-bold text-gray-900 mb-1">Admin Access Only</h3>
+                <p className="text-xs text-gray-500 mb-6">Enter administrative password to manage investments, top-ups, and prices.</p>
+
+                <form onSubmit={handleAdminLogin} className="space-y-4">
+                  {adminPasswordError && (
+                    <div className="p-3 bg-red-50 text-red-600 rounded-xl text-xs font-medium flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      {adminPasswordError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">Admin Password</label>
+                    <input 
+                      type="password"
+                      value={adminPasswordInput}
+                      onChange={(e) => setAdminPasswordInput(e.target.value)}
+                      placeholder="Enter admin password"
+                      className="w-full p-4 bg-gray-50 border-none rounded-2xl focus:ring-2 focus:ring-blue-600 transition-all text-sm font-bold"
+                      autoFocus
+                      required
+                    />
+                  </div>
+
+                  <button 
+                    type="submit"
+                    className="w-full py-4 bg-blue-600 text-white rounded-2xl font-bold text-sm hover:bg-blue-700 transition-all active:scale-[0.98] shadow-lg shadow-blue-100"
+                  >
+                    Unlock Admin Panel
+                  </button>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Public Visitor How to Invest / Contact Modal */}
+        <AnimatePresence>
+          {showContactModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowContactModal(false)}
+                className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                className="relative bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl border border-gray-100 z-10 max-h-[90vh] overflow-y-auto"
+              >
+                <button 
+                  onClick={() => setShowContactModal(false)}
+                  className="absolute top-6 right-6 p-2 text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+
+                <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-4">
+                  <Sparkles className="w-6 h-6" />
+                </div>
+                
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">Start Your PinVestment</h3>
+                <p className="text-xs text-gray-500 mb-6">Follow these simple steps to enroll in our high-yielding WAEC, NECO & NABTEB PIN investment portfolios.</p>
+
+                <div className="space-y-4 mb-6">
+                  <div className="flex gap-4 p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0">1</div>
+                    <div>
+                      <h4 className="font-bold text-sm text-gray-900">Select Plan & Capital</h4>
+                      <p className="text-xs text-gray-500 mt-0.5">Choose between WAEC, NECO, or NABTEB PIN plans starting from ₦10,000 up to ₦10,000,000+.</p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0">2</div>
+                    <div>
+                      <h4 className="font-bold text-sm text-gray-900">Contact Official Desk</h4>
+                      <p className="text-xs text-gray-500 mt-0.5">Reach out to our desk manager to request official deposit account details & verification.</p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                    <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0">3</div>
+                    <div>
+                      <h4 className="font-bold text-sm text-gray-900">Live Dashboard Portfolio</h4>
+                      <p className="text-xs text-gray-500 mt-0.5">Once confirmed, your portfolio goes live instantly and accrues profits daily in real time!</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3 pt-2">
+                  <a 
+                    href="https://wa.me/2348000000000?text=Hello%20PinVest%20Admin,%20I%20would%20like%20to%20start%20an%20investment."
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-3.5 bg-emerald-600 text-white rounded-2xl font-bold text-xs hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-emerald-100"
+                  >
+                    <Phone className="w-4 h-4" />
+                    Chat with Desk Manager on WhatsApp
+                  </a>
+                  <a 
+                    href="mailto:invest@pinvest.ng?subject=PinVest%20Investment%20Inquiry"
+                    className="w-full py-3.5 bg-gray-100 text-gray-800 rounded-2xl font-bold text-xs hover:bg-gray-200 transition-all flex items-center justify-center gap-2"
+                  >
+                    <Mail className="w-4 h-4" />
+                    Email Official Support Desk
+                  </a>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     </ErrorBoundary>
   );
@@ -1081,11 +1687,15 @@ function StatCard({ label, value, icon, color, subValue }: { label: string, valu
 
 const InvestmentRow: React.FC<{ 
   investment: Investment, 
+  isAdmin: boolean,
   onWithdraw: () => void, 
   onEdit: () => void, 
   onDelete: () => void,
-  onAddFunds: () => void
-}> = ({ investment, onWithdraw, onEdit, onDelete, onAddFunds }) => {
+  onAddFunds: () => void,
+  onDeleteSoldPin: (index: number) => void,
+  onDeleteWithdrawal: (index: number) => void,
+  onRequestAdminAuth: () => void
+}> = ({ investment, isAdmin, onWithdraw, onEdit, onDelete, onAddFunds, onDeleteSoldPin, onDeleteWithdrawal, onRequestAdminAuth }) => {
   const [accumulated, setAccumulated] = useState(0);
   const [progress, setProgress] = useState(0);
   const [showHistory, setShowHistory] = useState(false);
@@ -1147,38 +1757,38 @@ const InvestmentRow: React.FC<{
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <button 
-                onClick={onAddFunds}
-                className="font-bold text-gray-900 hover:text-blue-600 transition-colors text-left"
-                title="Click to add funds for this investor"
-              >
+              <span className="font-bold text-gray-900 text-left">
                 {investment.investorName}
-              </button>
-              <button 
-                onClick={onEdit}
-                className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
-                title="Edit Investment"
-              >
-                <Edit2 className="w-3 h-3" />
-              </button>
-              <button 
-                onClick={onDelete}
-                className="p-1 text-gray-400 hover:text-red-600 transition-colors"
-                title="Delete Investment"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
+              </span>
+              {isAdmin && (
+                <>
+                  <button 
+                    onClick={onEdit}
+                    className="p-1 text-gray-400 hover:text-blue-600 transition-colors"
+                    title="Edit Investment"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button 
+                    onClick={onDelete}
+                    className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                    title="Delete Investment"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </>
+              )}
               <button 
                 onClick={() => setShowHistory(!showHistory)}
                 className={`p-1 transition-colors ${showHistory ? 'text-blue-600' : 'text-gray-400 hover:text-blue-600'}`}
-                title="View Transaction History"
+                title="View Statement & History"
               >
-                <FileText className="w-3 h-3" />
+                <FileText className="w-3.5 h-3.5" />
               </button>
             </div>
             <p className="text-xs text-gray-500 flex items-center gap-1">
               <Clock className="w-3 h-3" />
-              Started {new Date(investment.startDate.toMillis()).toLocaleString()}
+              Started {new Date(investment.startDate.toMillis()).toLocaleDateString()}
             </p>
           </div>
         </div>
@@ -1275,9 +1885,20 @@ const InvestmentRow: React.FC<{
             <p className="text-[10px] uppercase tracking-wider font-bold text-gray-400 mb-2">Withdrawal History</p>
             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
               {investment.withdrawals.map((w, i) => (
-                <div key={i} className="flex justify-between text-[10px] text-gray-500">
+                <div key={i} className="flex justify-between items-center text-[10px] text-gray-500 py-0.5 hover:bg-gray-100/50 px-1 rounded transition-colors group/item">
                   <span>{new Date(w.date.toMillis()).toLocaleString()}</span>
-                  <span className="font-bold text-red-400">-₦{w.amount.toLocaleString()}</span>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className="text-red-400">-₦{w.amount.toLocaleString()}</span>
+                    {isAdmin && (
+                      <button
+                        onClick={() => onDeleteWithdrawal(i)}
+                        className="p-0.5 text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover/item:opacity-100 focus:opacity-100"
+                        title="Delete this withdrawal"
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1289,11 +1910,22 @@ const InvestmentRow: React.FC<{
             <p className="text-[10px] uppercase tracking-wider font-bold text-gray-400 mb-2">Directly Sold Pins History</p>
             <div className="space-y-1 max-h-24 overflow-y-auto pr-2">
               {investment.soldPins.map((s, i) => (
-                <div key={i} className="flex justify-between text-[10px] text-gray-500">
+                <div key={i} className="flex justify-between items-center text-[10px] text-gray-500 py-0.5 hover:bg-gray-100/50 px-1 rounded transition-colors group/item">
                   <span>
                     {new Date(s.date.toMillis()).toLocaleDateString()} - {s.pinCount}x {s.pinType} Pin(s) @ ₦{s.costPerPin}
                   </span>
-                  <span className="font-bold text-red-400">-₦{s.totalCost.toLocaleString()}</span>
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span className="text-red-400">-₦{s.totalCost.toLocaleString()}</span>
+                    {isAdmin && (
+                      <button
+                        onClick={() => onDeleteSoldPin(i)}
+                        className="p-0.5 text-gray-300 hover:text-red-500 transition-colors opacity-0 group-hover/item:opacity-100 focus:opacity-100"
+                        title="Delete this sold PIN record"
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1308,20 +1940,32 @@ const InvestmentRow: React.FC<{
             </p>
           </div>
           <div className="flex gap-2">
-            <button 
-              onClick={onAddFunds}
-              className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 transition-all active:scale-95 flex items-center gap-2 shadow-sm shadow-blue-200"
-            >
-              <Plus className="w-4 h-4" />
-              Add Funds
-            </button>
-            <button 
-              onClick={onWithdraw}
-              className="px-4 py-2 bg-red-600 text-white text-xs font-bold rounded-xl hover:bg-red-700 transition-all active:scale-95 flex items-center gap-2"
-            >
-              <ArrowDownCircle className="w-4 h-4" />
-              Withdraw
-            </button>
+            {isAdmin ? (
+              <>
+                <button 
+                  onClick={onAddFunds}
+                  className="px-4 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 transition-all active:scale-95 flex items-center gap-2 shadow-sm shadow-blue-200"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add Funds
+                </button>
+                <button 
+                  onClick={onWithdraw}
+                  className="px-4 py-2 bg-red-600 text-white text-xs font-bold rounded-xl hover:bg-red-700 transition-all active:scale-95 flex items-center gap-2"
+                >
+                  <ArrowDownCircle className="w-4 h-4" />
+                  Withdraw
+                </button>
+              </>
+            ) : (
+              <button 
+                onClick={() => setShowHistory(!showHistory)}
+                className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-bold rounded-xl transition-all flex items-center gap-2"
+              >
+                <FileText className="w-4 h-4 text-blue-600" />
+                {showHistory ? 'Hide Statement' : 'View Statement'}
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1341,4 +1985,4 @@ const InvestmentRow: React.FC<{
       </div>
     </motion.div>
   );
-}
+};
